@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "solana-bots"
+version = "0.1.0"
+description = ""
+authors = ["Fabricio Policarpo <fabricio.policarpo@hydrahost.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+python-dotenv = "*"
+requests = "*"
+websockets = "*"
+solana = "*"
+asyncio = "*"
+base58 = "*"
+construct = "*"
+typing-extensions = "*"
+anchorpy = "*"
+web3 = "*"
+aiohttp = "*"
+termcolor = "*"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
