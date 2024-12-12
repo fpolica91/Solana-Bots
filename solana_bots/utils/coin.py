@@ -24,8 +24,28 @@ class Coin(BaseClass):
     def __init__(self, rpc_url: str):
       super().__init__(rpc_url)
     
-    async def get_coin_data(self, mint: str) -> CoinData:
-      pass
+    async def get_coin_data(self, mint_str: str) -> Optional[CoinData]:
+        bonding_curve, associated_bonding_curve = await self.derive_bonding_curve_accounts(mint_str)
+        if bonding_curve is None or associated_bonding_curve is None:
+            return None
+
+        virtual_reserves = await self.get_virtual_reserves(bonding_curve)
+        if virtual_reserves is None:
+            return None
+
+        try:
+            return CoinData(
+                mint=Pubkey.from_string(mint_str),
+                bonding_curve=bonding_curve,
+                associated_bonding_curve=associated_bonding_curve,
+                virtual_token_reserves=int(virtual_reserves.virtualTokenReserves),
+                virtual_sol_reserves=int(virtual_reserves.virtualSolReserves),
+                token_total_supply=int(virtual_reserves.tokenTotalSupply),
+              complete=bool(virtual_reserves.complete),
+        )
+        except Exception as e:
+            print(e)
+            return None
 
     
     async def derive_bonding_curve_accounts(self, mint: str):

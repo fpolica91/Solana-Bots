@@ -104,7 +104,8 @@ class Streamer(BaseClass):
                                 if "Program data:" in log:
                                     mint, bc_pk, user = self.parse_log_data(log)
                                     cprint(f"Mint: {mint}, BC: {bc_pk}, User: {user}", "green")
-                                    await self.handle_token_trade(mint)
+                                    if mint:
+                                        await self.handle_token_trade(mint)
                                     
                         except json.JSONDecodeError:
                             cprint("Error decoding websocket message", "red")
