@@ -2,14 +2,14 @@ from solana.rpc.async_api import AsyncClient
 import asyncio
 from typing import List, Dict
 from termcolor import cprint
-from .base import BaseClass
+from .base_class import BaseClass
 from .coin import Coin
-from .constants import SYSTEM_PROGRAM, FEE_RECIPIENT, GLOBAL, TOKEN_PROGRAM, RENT, EVENT_AUTHORITY, PUMP_FUN_PROGRAM
+from .constants import SYSTEM_PROGRAM, FEE_RECIPIENT, GLOBAL, TOKEN_PROGRAM, RENT, EVENT_AUTHORITY, PUMP_FUN_PROGRAM,ASSOC_TOKEN_ACC_PROG
 from solders.keypair import Keypair #type: ignore
 import struct
 from solders.compute_budget import set_compute_unit_limit, set_compute_unit_price  # type: ignore
 from solana.rpc.types import TokenAccountOpts, TxOpts
-from .config import payer_keypair
+from .config import payer_keypair, UNIT_BUDGET, UNIT_PRICE
 import struct
 from solana.transaction import AccountMeta
 from spl.token.instructions import (
@@ -33,7 +33,6 @@ class TokenTrader(BaseClass):
     def __init__(self, rpc_url: str, coin_class: Coin):
         super().__init__(rpc_url)
         self.active_trades: Dict[str, asyncio.Task] = {}
-        self.semaphore = asyncio.Semaphore(5)
         self.coin = coin_class
         self.payer_keypair = payer_keypair
       
@@ -71,7 +70,7 @@ class TokenTrader(BaseClass):
             token_dec = 1e6
             virtual_sol_reserves = coin_data.virtual_sol_reserves / sol_dec
             virtual_token_reserves = coin_data.virtual_token_reserves / token_dec
-            amount = sol_for_tokens(sol_in, virtual_sol_reserves, virtual_token_reserves)
+            amount = self.coin.sol_for_tokens(sol_in, virtual_sol_reserves, virtual_token_reserves)
             amount = int(amount * token_dec)
             
             slippage_adjustment = 1 + (slippage / 100)
@@ -133,7 +132,106 @@ class TokenTrader(BaseClass):
             cprint(f"Error occurred during transaction: {e}", "red")
             return False
 
-    async def sell(self):
-        pass
+    async def sell(self, mint_str: str, percentage: int = 100, slippage: int = 5) -> bool:
+        try:
+            cprint(f"Starting sell transaction for mint: {mint_str}", "green")
+
+            if not (1 <= percentage <= 100):
+                cprint("Percentage must be between 1 and 100.", "red")
+                return False
+
+            coin_data = await self.coin.get_coin_data(mint_str)
+            
+            if not coin_data:
+                cprint("Failed to retrieve coin data.", "red")
+                return False
+
+            if coin_data.complete:
+                cprint("Warning: This token has bonded and is only tradable on Raydium.", "red")
+                return False
+
+            MINT = coin_data.mint
+            BONDING_CURVE = coin_data.bonding_curve
+            ASSOCIATED_BONDING_CURVE = coin_data.associated_bonding_curve
+            USER = self.payer_keypair.pubkey()
+            ASSOCIATED_USER = get_associated_token_address(USER, MINT)
+
+            cprint("Retrieving token balance...", "green")
+            token_balance = await self.coin.get_token_balance(mint_str)
+            if token_balance == 0 or token_balance is None:
+                cprint("Token balance is zero. Nothing to sell.", "red")
+                return False
+            cprint(f"Token Balance: {token_balance}", "green")
+            
+            cprint("Calculating transaction amounts...", "green")
+            sol_dec = 1e9
+            token_dec = 1e6
+            amount = int(token_balance * token_dec)
+            
+            virtual_sol_reserves = coin_data.virtual_sol_reserves / sol_dec
+            virtual_token_reserves = coin_data.virtual_token_reserves / token_dec
+            sol_out = self.coin.tokens_for_sol(token_balance, virtual_sol_reserves, virtual_token_reserves)
+            
+            slippage_adjustment = 1 - (slippage / 100)
+            min_sol_output = int((sol_out * slippage_adjustment) * sol_dec)
+            cprint(f"Amount: {amount}, Minimum Sol Out: {min_sol_output}", "green")
+
+            cprint("Creating swap instructions...", "green")
+            keys = [
+                AccountMeta(pubkey=GLOBAL, is_signer=False, is_writable=False),
+                AccountMeta(pubkey=FEE_RECIPIENT, is_signer=False, is_writable=True),
+                AccountMeta(pubkey=MINT, is_signer=False, is_writable=False),
+                AccountMeta(pubkey=BONDING_CURVE, is_signer=False, is_writable=True),
+                AccountMeta(pubkey=ASSOCIATED_BONDING_CURVE, is_signer=False, is_writable=True),
+                AccountMeta(pubkey=ASSOCIATED_USER, is_signer=False, is_writable=True),
+                AccountMeta(pubkey=USER, is_signer=True, is_writable=True),
+                AccountMeta(pubkey=SYSTEM_PROGRAM, is_signer=False, is_writable=False),
+                AccountMeta(pubkey=ASSOC_TOKEN_ACC_PROG, is_signer=False, is_writable=False),
+                AccountMeta(pubkey=TOKEN_PROGRAM, is_signer=False, is_writable=False),
+                AccountMeta(pubkey=EVENT_AUTHORITY, is_signer=False, is_writable=False),
+                AccountMeta(pubkey=PUMP_FUN_PROGRAM, is_signer=False, is_writable=False)
+            ]
+
+            data = bytearray()
+            data.extend(bytes.fromhex("33e685a4017f83ad"))
+            data.extend(struct.pack('<Q', amount))
+            data.extend(struct.pack('<Q', min_sol_output))
+            swap_instruction = Instruction(PUMP_FUN_PROGRAM, bytes(data), keys)
+
+            instructions = [
+                set_compute_unit_limit(UNIT_BUDGET),
+                set_compute_unit_price(UNIT_PRICE),
+                swap_instruction,
+            ]
+
+            if percentage == 100:
+                cprint("Preparing to close token account after swap...", "green")
+                close_account_instruction = close_account(CloseAccountParams(TOKEN_PROGRAM, ASSOCIATED_USER, USER, USER))
+                instructions.append(close_account_instruction)
+
+            cprint("Compiling transaction message...", "green")
+            compiled_message = MessageV0.try_compile(
+                self.payer_keypair.pubkey(),
+                instructions,
+                [],
+                self.client.get_latest_blockhash().value.blockhash,
+            )
+
+            cprint("Sending transaction...", "green")
+            txn_sig = self.client.send_transaction(
+                txn=VersionedTransaction(compiled_message, [self.payer_keypair]),
+                opts=TxOpts(skip_preflight=False)
+            ).value
+            cprint(f"Transaction Signature: {txn_sig}", "green")
+
+            cprint("Confirming transaction...", "green")
+            confirmed = await self.confirm_txn(txn_sig)
+            
+            cprint(f"Transaction confirmed: {confirmed}", "green")
+            return confirmed
+
+        except Exception as e:
+            cprint(f"Error occurred during transaction: {e}", "red")
+            return False
 
    

@@ -4,7 +4,7 @@ from construct import Flag, Int64ul, Padding, Struct
 from solders.pubkey import  Pubkey  # type: ignore
 from spl.token.instructions import get_associated_token_address
 from solana.rpc.async_api import AsyncClient
-from .base import BaseClass
+from .base_class import BaseClass
 from termcolor import cprint
 from .constants import PUMP_FUN_PROGRAM
 

@@ -1,23 +1,23 @@
 from solana.rpc.async_api import AsyncClient
 import asyncio
 import websockets
-from typing import List
+from typing import List, Dict
 from .constants import request
+from .trader import TokenTrader
 import json
 from termcolor import cprint
 from solders.pubkey import Pubkey #type: ignore
 import base64
 import os
-class BaseClass:
-    def __init__(self, rpc_url: str, max_concurrent: int = 5):
-        self.rpc_url = rpc_url
-        self.client = AsyncClient(rpc_url)
-        self.semaphore = asyncio.Semaphore(max_concurrent)
-        
+from .base_class import BaseClass
+from .coin import Coin
+
         
 class Streamer(BaseClass):
-    def __init__(self, rpc_url: str):
+    def __init__(self, rpc_url: str, coin_class: Coin):
         self.rpc_url = rpc_url
+        self.token_trader = TokenTrader(rpc_url, coin_class)
+        self.active_trades: Dict[str, asyncio.Task] = {}
         super().__init__(rpc_url, max_concurrent=5)
        
     
@@ -53,14 +53,37 @@ class Streamer(BaseClass):
                 has_init = True
                 break
         return has_init
-        
+    
+    def buy_token(self, mint: str):
+        with self.semaphore:
+            self.token_trader.buy(mint)
+            
+    async def handle_token_trade(self, mint: str):
+        """Handle complete trade cycle for a token"""
+        if mint in self.active_trades:
+            cprint(f"Trade already active for {mint}", "yellow")
+            return
+            
+        try:
+            self.active_trades[mint] = asyncio.current_task()
+            async with self.semaphore:
+                await self.token_trader.buy(mint)
+                await asyncio.sleep(20)
+                await self.token_trader.sell(mint)
+        except Exception as e:
+            cprint(f"Error trading {mint}: {e}", "red")
+        finally:
+            if mint in self.active_trades:
+                del self.active_trades[mint]
+       
     async def stream_transactions(self):
-        if not self.rpc_url:
+        wss_url = os.getenv("WSS_HTTPS_URL")
+        if not wss_url:
             raise ValueError("WSS_HTTPS_URL must be set in .env file")
     
         while True:
             try:
-                async with websockets.connect(self.rpc_url) as websocket:
+                async with websockets.connect(wss_url) as websocket:
                     cprint("WebSocket connected", "green")
                     cprint("👀 Monitoring for new tokens...", "green")
                     
@@ -81,6 +104,7 @@ class Streamer(BaseClass):
                                 if "Program data:" in log:
                                     mint, bc_pk, user = self.parse_log_data(log)
                                     cprint(f"Mint: {mint}, BC: {bc_pk}, User: {user}", "green")
+                                    await self.handle_token_trade(mint)
                                     
                         except json.JSONDecodeError:
                             cprint("Error decoding websocket message", "red")
@@ -94,13 +118,4 @@ class Streamer(BaseClass):
                 cprint(f"Error: {e}", "red")
                 await asyncio.sleep(5)
             
-            
-async def main():
-    streamer = Streamer(os.getenv("WSS_HTTPS_URL"))
-    await streamer.stream_transactions()
-    # base = BaseClass("https://api.mainnet-beta.solana.com")
-    # tasks = [base.test(i) for i in range(100)]
-    # await asyncio.gather(*tasks)
-    
-if __name__ == "__main__":
-    asyncio.run(main())
+
