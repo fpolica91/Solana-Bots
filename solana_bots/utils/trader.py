@@ -7,10 +7,12 @@ from .coin import Coin
 from .constants import SYSTEM_PROGRAM, FEE_RECIPIENT, GLOBAL, TOKEN_PROGRAM, RENT, EVENT_AUTHORITY, PUMP_FUN_PROGRAM,ASSOC_TOKEN_ACC_PROG
 from solders.keypair import Keypair #type: ignore
 import struct
+from solana.transaction import Signature
 from solders.compute_budget import set_compute_unit_limit, set_compute_unit_price  # type: ignore
 from solana.rpc.types import TokenAccountOpts, TxOpts
 from .config import payer_keypair, UNIT_BUDGET, UNIT_PRICE
 import struct
+from solana.rpc.commitment import Processed, Confirmed
 from solana.transaction import AccountMeta
 from spl.token.instructions import (
     CloseAccountParams,
@@ -22,6 +24,9 @@ from solders.compute_budget import set_compute_unit_limit, set_compute_unit_pric
 from solders.instruction import Instruction  # type: ignore
 from solders.message import MessageV0  # type: ignore
 from solders.transaction import VersionedTransaction  # type: ignore
+from solders.pubkey import Pubkey #type: ignore
+import json
+
 
 
 
@@ -35,11 +40,55 @@ class TokenTrader(BaseClass):
         self.active_trades: Dict[str, asyncio.Task] = {}
         self.coin = coin_class
         self.payer_keypair = payer_keypair
+        
+    async def get_token_balance(self, mint_str: str) -> float | None:
+        try:
+            mint = Pubkey.from_string(mint_str)
+            response = await self.client.get_token_accounts_by_owner_json_parsed(
+                payer_keypair.pubkey(),
+                TokenAccountOpts(mint=mint),
+                commitment=Processed
+            )
+            cprint(response.value, "green")
+            accounts = response.value
+            if accounts:
+                token_amount = accounts[0].account.data.parsed['info']['tokenAmount']['uiAmount']
+                return float(token_amount)
+
+            return None
+        except Exception as e:
+            cprint(f"Error fetching token balance: {e}", "red")
+            return None
+    async def confirm_txn(self, txn_sig: Signature, max_retries: int = 20, retry_interval: int = 3) -> bool:
+        retries = 1
+        
+        while retries < max_retries:
+            try:
+                txn_res = await self.client.get_transaction(txn_sig, encoding="json", commitment=Confirmed, max_supported_transaction_version=0)
+                txn_json = json.loads(txn_res.value.transaction.meta.to_json())
+                
+                if txn_json['err'] is None:
+                    cprint(f"Transaction confirmed... try count: {retries}", "green")
+                    return True
+                
+                cprint("Error: Transaction not confirmed. Retrying...", "red")
+                if txn_json['err']:
+                    cprint("Transaction failed.", "red")
+                    return False
+            except Exception as e:
+                cprint(f"Awaiting confirmation... try count: {retries}", "green")
+                retries += 1
+                await asyncio.sleep(retry_interval)
+        
+        cprint("Max retries reached. Transaction confirmation failed.", "red")
+        return None
       
     async def buy(self, mint_str: str, sol_in: float = 0.001, slippage: int = 5) -> bool:
         try:
             cprint(f"Starting buy transaction for mint: {mint_str}", "green")
-
+            if not mint_str:
+                cprint("Mint is required", "red")
+                return False
             coin_data = await self.coin.get_coin_data(mint_str)
             
             if not coin_data:
@@ -57,7 +106,8 @@ class TokenTrader(BaseClass):
 
             cprint("Fetching or creating associated token account...", "green")
             try:
-                ASSOCIATED_USER = self.client.get_token_accounts_by_owner(USER, TokenAccountOpts(MINT)).value[0].pubkey
+                token_accounts = await self.client.get_token_accounts_by_owner(USER, TokenAccountOpts(MINT))
+                ASSOCIATED_USER = token_accounts.value[0].pubkey
                 token_account_instruction = None
                 cprint(f"Token account found: {ASSOCIATED_USER}", "green")
             except:
@@ -112,14 +162,14 @@ class TokenTrader(BaseClass):
                 self.payer_keypair.pubkey(),
                 instructions,
                 [],
-                self.client.get_latest_blockhash().value.blockhash,
+               await self.client.get_latest_blockhash().value.blockhash,
             )
 
             cprint("Sending transaction...", "green")
-            txn_sig = self.client.send_transaction(
+            txn_sig = await self.client.send_transaction(
                 txn=VersionedTransaction(compiled_message, [self.payer_keypair]),
                 opts=TxOpts(skip_preflight=True)
-            ).value
+            )
             cprint(f"Transaction Signature: {txn_sig}", "green")
 
             cprint("Confirming transaction...", "green")
@@ -214,14 +264,14 @@ class TokenTrader(BaseClass):
                 self.payer_keypair.pubkey(),
                 instructions,
                 [],
-                self.client.get_latest_blockhash().value.blockhash,
+                await self.client.get_latest_blockhash().value.blockhash,
             )
 
             cprint("Sending transaction...", "green")
-            txn_sig = self.client.send_transaction(
+            txn_sig = await self.client.send_transaction(
                 txn=VersionedTransaction(compiled_message, [self.payer_keypair]),
                 opts=TxOpts(skip_preflight=False)
-            ).value
+            )
             cprint(f"Transaction Signature: {txn_sig}", "green")
 
             cprint("Confirming transaction...", "green")

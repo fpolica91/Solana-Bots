@@ -10,14 +10,13 @@ from solders.pubkey import Pubkey #type: ignore
 import base64
 import os
 from .base_class import BaseClass
-from .coin import Coin
+
 
         
 class Streamer(BaseClass):
     def __init__(self, rpc_url: str):
         self.rpc_url = rpc_url
-        self.coin = Coin(rpc_url)
-        self.token_trader = TokenTrader(rpc_url, self.coin)
+        self.token_trader = TokenTrader(rpc_url)
         self.active_trades: Dict[str, asyncio.Task] = {}
         super().__init__(rpc_url, max_concurrent=5)
        
@@ -54,7 +53,11 @@ class Streamer(BaseClass):
                 has_init = True
                 break
         return has_init
-                
+    
+    def buy_token(self, mint: str):
+        with self.semaphore:
+            self.token_trader.buy(mint)
+            
     async def handle_token_trade(self, mint: str):
         """Handle complete trade cycle for a token"""
         if mint in self.active_trades:
@@ -74,13 +77,12 @@ class Streamer(BaseClass):
                 del self.active_trades[mint]
        
     async def stream_transactions(self):
-        wss_url = os.getenv("WSS_HTTPS_URL")
-        if not wss_url:
+        if not self.rpc_url:
             raise ValueError("WSS_HTTPS_URL must be set in .env file")
     
         while True:
             try:
-                async with websockets.connect(wss_url) as websocket:
+                async with websockets.connect(self.rpc_url) as websocket:
                     cprint("WebSocket connected", "green")
                     cprint("👀 Monitoring for new tokens...", "green")
                     
@@ -101,8 +103,7 @@ class Streamer(BaseClass):
                                 if "Program data:" in log:
                                     mint, bc_pk, user = self.parse_log_data(log)
                                     cprint(f"Mint: {mint}, BC: {bc_pk}, User: {user}", "green")
-                                    if mint:
-                                        await self.handle_token_trade(mint)
+                                    await self.handle_token_trade(mint)
                                     
                         except json.JSONDecodeError:
                             cprint("Error decoding websocket message", "red")

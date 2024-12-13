@@ -25,6 +25,8 @@ class Coin(BaseClass):
       super().__init__(rpc_url)
     
     async def get_coin_data(self, mint_str: str) -> Optional[CoinData]:
+        cprint("Getting coin data...", "green")
+        cprint(f"Mint: {mint_str}", "green")
         bonding_curve, associated_bonding_curve = await self.derive_bonding_curve_accounts(mint_str)
         if bonding_curve is None or associated_bonding_curve is None:
             return None
@@ -79,13 +81,13 @@ class Coin(BaseClass):
       except Exception as e:
         cprint(f"Error deriving bonding curve accounts: {e}", "red")
     
-    async def sol_for_tokens(self, sol_spent: int, sol_reserves: int, token_reserves: int):
+    def sol_for_tokens(self, sol_spent: int, sol_reserves: int, token_reserves: int):
         new_sol_reserves = sol_reserves + sol_spent
         new_token_reserves = (sol_reserves * token_reserves) / new_sol_reserves
         token_received = token_reserves - new_token_reserves
         return token_received
      
-    async def tokens_for_sol(self,tokens_to_sell: int, sol_reserves: int, token_reserves: int):
+    def tokens_for_sol(self,tokens_to_sell: int, sol_reserves: int, token_reserves: int):
         new_token_reserves = token_reserves + tokens_to_sell
         new_sol_reserves = (sol_reserves * token_reserves) / new_token_reserves
         sol_received = sol_reserves - new_sol_reserves
