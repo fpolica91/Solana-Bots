@@ -19,7 +19,7 @@ class Streamer(BaseClass):
         self.coin = Coin(rpc_url)
         self.token_trader = TokenTrader(rpc_url, self.coin)
         self.active_trades: Dict[str, asyncio.Task] = {}
-        super().__init__(rpc_url, max_concurrent=5)
+        super().__init__(rpc_url, max_concurrent=3)
        
     
     def parse_log_data(self, log_data: str) -> tuple[str, str, str]:
@@ -66,10 +66,10 @@ class Streamer(BaseClass):
             async with self.semaphore:
                 # Initial buy
                 await self.token_trader.buy(mint)
-                await asyncio.sleep(20)
+                await asyncio.sleep(30)
                 
                 # Aggressive sell retry logic
-                for attempt in range(4):
+                for attempt in range(7):
                     try:
                         sale_response = await self.token_trader.sell(mint)
                         if sale_response:
@@ -78,7 +78,7 @@ class Streamer(BaseClass):
                         
                         if attempt < 3:  # Don't sleep on last attempt
                             cprint(f"Sale attempt {attempt + 1} failed, retrying...", "yellow")
-                            await asyncio.sleep(2)
+                            await asyncio.sleep(3)
                             
                     except Exception as e:
                         cprint(f"Sale attempt {attempt + 1} failed with error: {e}", "red")
@@ -121,7 +121,7 @@ class Streamer(BaseClass):
                                     mint, bc_pk, user = self.parse_log_data(log)
                                     cprint(f"Mint: {mint}, BC: {bc_pk}, User: {user}", "green")
                                     if mint:
-                                        await self.handle_token_trade(mint)
+                                       asyncio.create_task(self.handle_token_trade(mint))
                                     
                         except json.JSONDecodeError:
                             cprint("Error decoding websocket message", "red")

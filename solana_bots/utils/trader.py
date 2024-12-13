@@ -178,7 +178,7 @@ class TokenTrader(BaseClass):
             cprint(f"Transaction Signature: {txn_sig}", "green")
 
             cprint("Confirming transaction...", "green")
-            confirmed = await self.confirm_txn(txn_sig)
+            confirmed = await self.confirm_txn(txn_sig, operation="buy")
             
             cprint(f"Transaction confirmed: {confirmed}", "green")
             return confirmed
@@ -187,7 +187,7 @@ class TokenTrader(BaseClass):
             cprint(f"Error occurred during transaction: {e}", "red")
             return False
 
-    async def sell(self, mint_str: str, percentage: int = 100, slippage: int = 5) -> bool:
+    async def sell(self, mint_str: str, percentage: int = 100, slippage: int = 5, max_retries: int = 7) -> bool:
         try:
             cprint(f"Starting sell transaction for mint: {mint_str}", "green")
 
@@ -281,7 +281,7 @@ class TokenTrader(BaseClass):
             cprint(f"Transaction Signature: {txn_sig}", "green")
 
             cprint("Confirming transaction...", "green")
-            confirmed = await self.confirm_txn(txn_sig)
+            confirmed = await self.confirm_txn(txn_sig, max_retries=max_retries, operation="sell" )
             
             cprint(f"Transaction confirmed: {confirmed}", "green")
             return confirmed
