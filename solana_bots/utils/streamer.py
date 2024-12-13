@@ -19,7 +19,7 @@ class Streamer(BaseClass):
         self.coin = Coin(rpc_url)
         self.token_trader = TokenTrader(rpc_url, self.coin)
         self.active_trades: Dict[str, asyncio.Task] = {}
-        super().__init__(rpc_url, max_concurrent=2)
+        super().__init__(rpc_url, max_concurrent=3)
         self.monitoring_task = asyncio.create_task(self.monitor_trades())
         
     async def monitor_trades(self):
@@ -129,7 +129,7 @@ class Streamer(BaseClass):
                     async for message in websocket:
                         try:
                             if self.semaphore.locked():
-                                cprint("Semaphore locked, skipping message", "red")
+                    
                                 continue
                             parsed = json.loads(message)
                             logs = parsed.get("params", {}).get("result", {}).get("value", {}).get("logs", [])
