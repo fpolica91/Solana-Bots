@@ -59,14 +59,15 @@ class TokenTrader(BaseClass):
         except Exception as e:
             cprint(f"Error fetching token balance: {e}", "red")
             return None
-    async def confirm_txn(self, txn_sig: Signature, max_retries: int = 20, retry_interval: int = 3) -> bool:
+          
+    async def confirm_txn(self, txn_sig: Signature, max_retries: int = 7, retry_interval: int = 2) -> bool:
         retries = 1
-        
         while retries < max_retries:
             try:
                 txn_res = await self.client.get_transaction(txn_sig, encoding="json", commitment=Confirmed, max_supported_transaction_version=0)
+                print(txn_res,"RESPONSE BITCH")
                 txn_json = json.loads(txn_res.value.transaction.meta.to_json())
-                
+                cprint(txn_json, "green")
                 if txn_json['err'] is None:
                     cprint(f"Transaction confirmed... try count: {retries}", "green")
                     return True
@@ -76,7 +77,7 @@ class TokenTrader(BaseClass):
                     cprint("Transaction failed.", "red")
                     return False
             except Exception as e:
-                cprint(f"Awaiting confirmation... try count: {retries}", "green")
+                cprint(f"Awaiting confirmation on txn {txn_sig}... try count: {retries}", "green")
                 retries += 1
                 await asyncio.sleep(retry_interval)
         
@@ -158,11 +159,13 @@ class TokenTrader(BaseClass):
             instructions.append(swap_instruction)
 
             cprint("Compiling transaction message...", "green")
+            blockhash = await self.client.get_latest_blockhash()
+            
             compiled_message = MessageV0.try_compile(
                 self.payer_keypair.pubkey(),
                 instructions,
                 [],
-               await self.client.get_latest_blockhash().value.blockhash,
+               blockhash.value.blockhash,
             )
 
             cprint("Sending transaction...", "green")
@@ -170,6 +173,7 @@ class TokenTrader(BaseClass):
                 txn=VersionedTransaction(compiled_message, [self.payer_keypair]),
                 opts=TxOpts(skip_preflight=True)
             )
+            txn_sig = txn_sig.value
             cprint(f"Transaction Signature: {txn_sig}", "green")
 
             cprint("Confirming transaction...", "green")
@@ -207,7 +211,7 @@ class TokenTrader(BaseClass):
             ASSOCIATED_USER = get_associated_token_address(USER, MINT)
 
             cprint("Retrieving token balance...", "green")
-            token_balance = await self.coin.get_token_balance(mint_str)
+            token_balance = await self.get_token_balance(mint_str)
             if token_balance == 0 or token_balance is None:
                 cprint("Token balance is zero. Nothing to sell.", "red")
                 return False
@@ -258,13 +262,13 @@ class TokenTrader(BaseClass):
                 cprint("Preparing to close token account after swap...", "green")
                 close_account_instruction = close_account(CloseAccountParams(TOKEN_PROGRAM, ASSOCIATED_USER, USER, USER))
                 instructions.append(close_account_instruction)
-
+            blockhash = await self.client.get_latest_blockhash()
             cprint("Compiling transaction message...", "green")
             compiled_message = MessageV0.try_compile(
                 self.payer_keypair.pubkey(),
                 instructions,
                 [],
-                await self.client.get_latest_blockhash().value.blockhash,
+                blockhash.value.blockhash,
             )
 
             cprint("Sending transaction...", "green")
@@ -272,6 +276,7 @@ class TokenTrader(BaseClass):
                 txn=VersionedTransaction(compiled_message, [self.payer_keypair]),
                 opts=TxOpts(skip_preflight=False)
             )
+            txn_sig = txn_sig.value
             cprint(f"Transaction Signature: {txn_sig}", "green")
 
             cprint("Confirming transaction...", "green")
