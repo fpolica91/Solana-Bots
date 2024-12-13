@@ -19,8 +19,22 @@ class Streamer(BaseClass):
         self.coin = Coin(rpc_url)
         self.token_trader = TokenTrader(rpc_url, self.coin)
         self.active_trades: Dict[str, asyncio.Task] = {}
-        super().__init__(rpc_url, max_concurrent=3)
-       
+        super().__init__(rpc_url, max_concurrent=2)
+        self.monitoring_task = asyncio.create_task(self.monitor_trades())
+        
+    async def monitor_trades(self):
+        while True:
+            try:
+                current_time = asyncio.get_event_loop().time()
+                for mint, task in list(self.active_trades.items()):
+                    if not task.done() and (current_time - task.get_coro().cr_frame.f_locals.get('start_time', current_time)) > 300:
+                        cprint(f"Trade {mint} has been active for more than 300 seconds, cancelling...", "red")
+                        task.cancel()
+                        del self.active_trades[mint]
+            except Exception as e:
+                cprint(f"Error monitoring trades: {e}", "red")
+            await asyncio.sleep(60) 
+                
     
     def parse_log_data(self, log_data: str) -> tuple[str, str, str]:
         try:
@@ -58,14 +72,18 @@ class Streamer(BaseClass):
     async def handle_token_trade(self, mint: str):
         """Handle complete trade cycle for a token"""
         if mint in self.active_trades:
-            cprint(f"Trade already active for {mint}", "yellow")
+            cprint(f"Trade already active for {mint}", "red")
             return
         
         try:
             self.active_trades[mint] = asyncio.current_task()
             async with self.semaphore:
-                # Initial buy
-                await self.token_trader.buy(mint)
+                
+                buy_succes = await self.token_trader.buy(mint)
+                if not buy_succes:
+                    cprint(f"Failed to buy {mint}", "red")
+                    return
+                
                 await asyncio.sleep(30)
                 
                 # Aggressive sell retry logic
@@ -73,22 +91,20 @@ class Streamer(BaseClass):
                     try:
                         sale_response = await self.token_trader.sell(mint)
                         if sale_response:
-                            cprint(f"Successfully sold {mint} on attempt {attempt + 1}", "green")
+                            cprint(f"Successfully sold {mint} on attempt {attempt + 1}", "magenta")
                             break
                         
-                        if attempt < 3:  # Don't sleep on last attempt
-                            cprint(f"Sale attempt {attempt + 1} failed, retrying...", "yellow")
-                            await asyncio.sleep(3)
+                        await asyncio.sleep(5)
                             
                     except Exception as e:
                         cprint(f"Sale attempt {attempt + 1} failed with error: {e}", "red")
-                        if attempt < 3:
-                            backoff = min(2 * (1.5 ** attempt), 10)  
+                        if attempt == 9:
+                            cprint(f"Failed to sell {mint} after 10 attempts", "red")
+                        elif attempt < 9:
+                            backoff = min(2 * (2 ** attempt), 10)
                             await asyncio.sleep(backoff)
-                            
         except Exception as e:
             cprint(f"Critical error trading {mint}: {e}", "red")
-            
         finally:
             if mint in self.active_trades:
                 del self.active_trades[mint]
@@ -97,7 +113,7 @@ class Streamer(BaseClass):
         wss_url = os.getenv("WSS_HTTPS_URL")
         if not wss_url:
             raise ValueError("WSS_HTTPS_URL must be set in .env file")
-    
+        
         while True:
             try:
                 async with websockets.connect(wss_url) as websocket:
@@ -109,7 +125,6 @@ class Streamer(BaseClass):
                     async for message in websocket:
                         try:
                             if self.semaphore.locked():
-                                cprint("Semaphore locked, skipping message", "yellow")
                                 continue
                             parsed = json.loads(message)
                             logs = parsed.get("params", {}).get("result", {}).get("value", {}).get("logs", [])
@@ -120,7 +135,7 @@ class Streamer(BaseClass):
                             for log in logs:
                                 if "Program data:" in log:
                                     mint, bc_pk, user = self.parse_log_data(log)
-                                    cprint(f"Mint: {mint}, BC: {bc_pk}, User: {user}", "green")
+                                    cprint(f"Mint: {mint}, BC: {bc_pk}, User: {user}", "blue")
                                     if mint:
                                        asyncio.create_task(self.handle_token_trade(mint))
                                     

@@ -29,11 +29,6 @@ import json
 
 
 
-
-
-
-
-
 class TokenTrader(BaseClass):
     def __init__(self, rpc_url: str, coin_class: Coin):
         super().__init__(rpc_url)
@@ -62,7 +57,7 @@ class TokenTrader(BaseClass):
           
     async def confirm_txn(self, txn_sig: Signature, max_retries: int = 7, retry_interval: int = 2, operation: str = "buy") -> bool:
         retries = 1
-        color = "green" if operation == "buy" else "yellow"
+        color = "green" if operation == "buy" else "magenta"
         cprint(f"Confirming transaction for {operation} operation...", color)
         while retries < max_retries:
             try:
@@ -70,19 +65,19 @@ class TokenTrader(BaseClass):
                 txn_json = json.loads(txn_res.value.transaction.meta.to_json())
                 cprint(txn_json, color)
                 if txn_json['err'] is None:
-                    cprint(f"Transaction confirmed... try count: {retries}", color)
+                    cprint(f"Transaction confirmed... try count on {operation}: {retries}", color)
                     return True
                 
-                cprint("Error: Transaction not confirmed. Retrying...", color)
+                cprint("Error: Transaction not confirmed. Retrying on {operation}...", color)
                 if txn_json['err']:
-                    cprint("Transaction failed.", color)
+                    cprint("Transaction failed on {operation}.", color)
                     return False
             except Exception as e:
-                cprint(f"Awaiting confirmation on txn {txn_sig}... try count: {retries}", "red")
+                cprint(f"Awaiting confirmation on txn {txn_sig}... try count on {operation}: {retries}", "magenta")
                 retries += 1 
                 await asyncio.sleep(retry_interval)
         
-        cprint("Max retries reached. Transaction confirmation failed.", "red")
+        cprint("Max retries reached. Transaction confirmation failed. on {operation}", color)
         return None
       
     async def buy(self, mint_str: str, sol_in: float = 0.001, slippage: int = 5) -> bool:
@@ -175,9 +170,7 @@ class TokenTrader(BaseClass):
                 opts=TxOpts(skip_preflight=True)
             )
             txn_sig = txn_sig.value
-            cprint(f"Transaction Signature: {txn_sig}", "green")
-
-            cprint("Confirming transaction...", "green")
+            
             confirmed = await self.confirm_txn(txn_sig, operation="buy")
             
             cprint(f"Transaction confirmed: {confirmed}", "green")
