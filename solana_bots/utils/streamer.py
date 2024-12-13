@@ -63,11 +63,15 @@ class Streamer(BaseClass):
         
     def is_valid_stream(self, logs: List):
         has_init = False
+        has_buy = False
         for msg in logs:
             if "InitializeMint2" in msg or "Create Metadata Accounts v3" in msg:
                 has_init = True
+                return True
+            elif "Buy" in msg:
+                has_buy = True
                 break
-        return has_init
+        return has_init and has_buy
                 
     async def handle_token_trade(self, mint: str):
         """Handle complete trade cycle for a token"""
@@ -84,17 +88,17 @@ class Streamer(BaseClass):
                     cprint(f"Failed to buy {mint}", "red")
                     return
                 
-                await asyncio.sleep(30)
+                await asyncio.sleep(40)
                 
                 # Aggressive sell retry logic
-                for attempt in range(10):
+                for attempt in range(12):
                     try:
                         sale_response = await self.token_trader.sell(mint)
                         if sale_response:
                             cprint(f"Successfully sold {mint} on attempt {attempt + 1}", "magenta")
                             break
                         
-                        await asyncio.sleep(5)
+                        await asyncio.sleep(6)
                             
                     except Exception as e:
                         cprint(f"Sale attempt {attempt + 1} failed with error: {e}", "red")
@@ -125,6 +129,7 @@ class Streamer(BaseClass):
                     async for message in websocket:
                         try:
                             if self.semaphore.locked():
+                                cprint("Semaphore locked, skipping message", "red")
                                 continue
                             parsed = json.loads(message)
                             logs = parsed.get("params", {}).get("result", {}).get("value", {}).get("logs", [])

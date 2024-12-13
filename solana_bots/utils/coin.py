@@ -74,6 +74,7 @@ class Coin(BaseClass):
       )
       try:
         account_info = await self.client.get_account_info(bonding_curve)
+        cprint(f"Account info: {account_info}", "green")
         data = account_info.value.data
         parsed_data = bonding_curve_struct.parse(data)
         return parsed_data
