@@ -60,24 +60,25 @@ class TokenTrader(BaseClass):
             cprint(f"Error fetching token balance: {e}", "red")
             return None
           
-    async def confirm_txn(self, txn_sig: Signature, max_retries: int = 7, retry_interval: int = 2) -> bool:
+    async def confirm_txn(self, txn_sig: Signature, max_retries: int = 7, retry_interval: int = 2, operation: str = "buy") -> bool:
         retries = 1
+        color = "green" if operation == "buy" else "yellow"
+        cprint(f"Confirming transaction for {operation} operation...", color)
         while retries < max_retries:
             try:
                 txn_res = await self.client.get_transaction(txn_sig, encoding="json", commitment=Confirmed, max_supported_transaction_version=0)
-                print(txn_res,"RESPONSE BITCH")
                 txn_json = json.loads(txn_res.value.transaction.meta.to_json())
-                cprint(txn_json, "green")
+                cprint(txn_json, color)
                 if txn_json['err'] is None:
-                    cprint(f"Transaction confirmed... try count: {retries}", "green")
+                    cprint(f"Transaction confirmed... try count: {retries}", color)
                     return True
                 
-                cprint("Error: Transaction not confirmed. Retrying...", "red")
+                cprint("Error: Transaction not confirmed. Retrying...", color)
                 if txn_json['err']:
-                    cprint("Transaction failed.", "red")
+                    cprint("Transaction failed.", color)
                     return False
             except Exception as e:
-                cprint(f"Awaiting confirmation on txn {txn_sig}... try count: {retries}", "green")
+                cprint(f"Awaiting confirmation on txn {txn_sig}... try count: {retries}", "red")
                 retries += 1
                 await asyncio.sleep(retry_interval)
         

@@ -60,15 +60,34 @@ class Streamer(BaseClass):
         if mint in self.active_trades:
             cprint(f"Trade already active for {mint}", "yellow")
             return
-            
+        
         try:
             self.active_trades[mint] = asyncio.current_task()
             async with self.semaphore:
+                # Initial buy
                 await self.token_trader.buy(mint)
                 await asyncio.sleep(20)
-                await self.token_trader.sell(mint)
+                
+                # Aggressive sell retry logic
+                for attempt in range(4):
+                    try:
+                        sale_response = await self.token_trader.sell(mint)
+                        if sale_response:
+                            cprint(f"Successfully sold {mint} on attempt {attempt + 1}", "green")
+                            break
+                        
+                        if attempt < 3:  # Don't sleep on last attempt
+                            cprint(f"Sale attempt {attempt + 1} failed, retrying...", "yellow")
+                            await asyncio.sleep(2)
+                            
+                    except Exception as e:
+                        cprint(f"Sale attempt {attempt + 1} failed with error: {e}", "red")
+                        if attempt < 3:
+                            await asyncio.sleep(2)
+                            
         except Exception as e:
-            cprint(f"Error trading {mint}: {e}", "red")
+            cprint(f"Critical error trading {mint}: {e}", "red")
+            
         finally:
             if mint in self.active_trades:
                 del self.active_trades[mint]
