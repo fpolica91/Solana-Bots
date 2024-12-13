@@ -69,7 +69,7 @@ class Streamer(BaseClass):
                 await asyncio.sleep(30)
                 
                 # Aggressive sell retry logic
-                for attempt in range(7):
+                for attempt in range(10):
                     try:
                         sale_response = await self.token_trader.sell(mint)
                         if sale_response:
@@ -83,7 +83,8 @@ class Streamer(BaseClass):
                     except Exception as e:
                         cprint(f"Sale attempt {attempt + 1} failed with error: {e}", "red")
                         if attempt < 3:
-                            await asyncio.sleep(2)
+                            backoff = min(2 * (1.5 ** attempt), 10)  
+                            await asyncio.sleep(backoff)
                             
         except Exception as e:
             cprint(f"Critical error trading {mint}: {e}", "red")

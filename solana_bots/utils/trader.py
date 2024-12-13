@@ -79,7 +79,7 @@ class TokenTrader(BaseClass):
                     return False
             except Exception as e:
                 cprint(f"Awaiting confirmation on txn {txn_sig}... try count: {retries}", "red")
-                retries += 1
+                retries += 1 
                 await asyncio.sleep(retry_interval)
         
         cprint("Max retries reached. Transaction confirmation failed.", "red")

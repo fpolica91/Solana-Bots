@@ -27,7 +27,7 @@ class Coin(BaseClass):
         cprint("Getting coin data...", "green")
         cprint(f"Mint: {mint_str}", "green")
         bonding_curve, associated_bonding_curve = await self.derive_bonding_curve_accounts(mint_str)
-        if bonding_curve is None or associated_bonding_curve is None:
+        if not all([bonding_curve, associated_bonding_curve]):
             return None
 
         virtual_reserves = await self.get_virtual_reserves(bonding_curve)
