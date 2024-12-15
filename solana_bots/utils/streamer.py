@@ -35,7 +35,7 @@ class Streamer(BaseClass):
                     WHERE status = 'active'
                     """
                 )
-                active_trades = self.cursor.fetchall()
+                active_trades = self.cursor.fetchall() 
                 cprint(f"Active trades: {len(active_trades)}", "blue")
                 
                 for trade in active_trades:
@@ -50,12 +50,44 @@ class Streamer(BaseClass):
                         # Calculate profit percentage
                         profit_percentage = ((current_price - bought_price) / bought_price) * 100
                         cprint(f"the profit percentage is {profit_percentage}", "blue")
+                        
+                        # Update the current price and profit percentage in the database
+                        self.cursor.execute(
+                            """
+                            UPDATE trades 
+                            SET current_price = ?, take_profit_percentage = ? 
+                            WHERE mint = ? AND status = 'active'
+                            """,
+                            (current_price, profit_percentage, mint)
+                        )
+                        self.db.commit()
+                        
                         # If profit target met, initiate sell
                         if profit_percentage >= take_profit:
                             cprint(f"Take profit target met for {mint}! Current profit: {profit_percentage:.2f}%", "green")
                             # Create sell task
                             sell_task = asyncio.create_task(self.token_trader.sell(mint))
                             self.active_trades[mint] = sell_task
+                            
+                            # Wait for the sell task to complete
+                            try:
+                                sale_result = await sell_task
+                                if sale_result:  # Assuming sell returns True on successful sale
+                                    # Update trade status to completed
+                                    self.cursor.execute(
+                                        """
+                                        UPDATE trades 
+                                        SET status = 'completed', sold_price = ?, sold_at = CURRENT_TIMESTAMP 
+                                        WHERE mint = ? AND status = 'active'
+                                        """,
+                                        (current_price, mint)
+                                    )
+                                    self.db.commit()
+                                    cprint(f"Trade completed for {mint}", "green")
+                                    # Remove from active trades
+                                    del self.active_trades[mint]
+                            except Exception as e:
+                                cprint(f"Error during sale of {mint}: {e}", "red")
                         
                         # Log current profit/loss
                         cprint(f"Token {mint} current P/L: {profit_percentage:.2f}%", "yellow")
