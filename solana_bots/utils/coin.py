@@ -6,7 +6,9 @@ from spl.token.instructions import get_associated_token_address
 from .base_class import BaseClass
 from termcolor import cprint
 from .constants import PUMP_FUN_PROGRAM
-
+from solana.rpc.types import TokenAccountOpts, TxOpts
+from solana.rpc.commitment import Processed, Confirmed
+from solders.keypair import Keypair #type: ignore
 
 @dataclass
 class CoinData:
@@ -74,7 +76,15 @@ class Coin(BaseClass):
       try:
         account_info = await self.client.get_account_info(bonding_curve)
         
+        if not account_info or not account_info.value:
+            cprint(f"No account info found for bonding curve: {bonding_curve}", "red")
+            return None
+            
         data = account_info.value.data
+        if not data:
+            cprint(f"No data found in account info for bonding curve: {bonding_curve}", "red")
+            return None
+            
         parsed_data = bonding_curve_struct.parse(data)
         return parsed_data
       except Exception as e:
@@ -93,6 +103,37 @@ class Coin(BaseClass):
         sol_received = sol_reserves - new_sol_reserves
         return sol_received
     
+    async def get_token_price(self, mint_str: str):
+        coin_data = await self.get_coin_data(mint_str)
+        if coin_data is None:
+            return None
+      
+        sol_reserves = coin_data.virtual_sol_reserves / 1e9
+        token_reserves = coin_data.virtual_token_reserves / 1e6
+        
+        try:
+            price = sol_reserves / token_reserves
+            return price
+        except ZeroDivisionError:
+            return None
+        
+    async def get_token_balance(self, mint_str: str, payer_keypair: Keypair) -> float | None:
+        try:
+            mint = Pubkey.from_string(mint_str)
+            response = await self.client.get_token_accounts_by_owner_json_parsed(
+                payer_keypair.pubkey(),
+                TokenAccountOpts(mint=mint),
+                commitment=Processed
+            )
+            
+            accounts = response.value
+            if accounts:
+                token_amount = accounts[0].account.data.parsed['info']['tokenAmount']['uiAmount']
+                return float(token_amount)
 
+            return None
+        except Exception as e:
+            cprint(f"Error fetching token balance: {e}", "red")
+            return None
 
 

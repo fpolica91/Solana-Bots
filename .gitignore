@@ -1,3 +1,4 @@
 .env
 kafka.sh
 kafka_ca.pem
+*.db

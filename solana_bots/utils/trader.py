@@ -28,6 +28,7 @@ from solders.pubkey import Pubkey #type: ignore
 import json
 
 
+PERCENTAGE_TAKE_PROFIT = 10.0
 
 class TokenTrader(BaseClass):
     def __init__(self, rpc_url: str, coin_class: Coin):
@@ -36,25 +37,6 @@ class TokenTrader(BaseClass):
         self.coin = coin_class
         self.payer_keypair = payer_keypair
         
-    async def get_token_balance(self, mint_str: str) -> float | None:
-        try:
-            mint = Pubkey.from_string(mint_str)
-            response = await self.client.get_token_accounts_by_owner_json_parsed(
-                payer_keypair.pubkey(),
-                TokenAccountOpts(mint=mint),
-                commitment=Processed
-            )
-            cprint(response.value, "green")
-            accounts = response.value
-            if accounts:
-                token_amount = accounts[0].account.data.parsed['info']['tokenAmount']['uiAmount']
-                return float(token_amount)
-
-            return None
-        except Exception as e:
-            cprint(f"Error fetching token balance: {e}", "red")
-            return None
-          
     async def confirm_txn(self, txn_sig: Signature, max_retries: int = 7, retry_interval: int = 2, operation: str = "buy") -> bool:
         retries = 1
         color = "green" if operation == "buy" else "magenta"
@@ -81,104 +63,147 @@ class TokenTrader(BaseClass):
         return None
       
     async def buy(self, mint_str: str, sol_in: float = 0.001, slippage: int = 5) -> bool:
-        try:
-            cprint(f"Starting buy transaction for mint: {mint_str}", "green")
-            if not mint_str:
-                cprint("Mint is required", "red")
-                return False
-            coin_data = await self.coin.get_coin_data(mint_str)
-            
-            if not coin_data:
-                cprint("Failed to retrieve coin data.", "red")
-                return False
-
-            if coin_data.complete:
-                cprint("Warning: This token has bonded and is only tradable on Raydium.", "red")
-                return False
-
-            MINT = coin_data.mint
-            BONDING_CURVE = coin_data.bonding_curve
-            ASSOCIATED_BONDING_CURVE = coin_data.associated_bonding_curve
-            USER = self.payer_keypair.pubkey()
-
-            cprint("Fetching or creating associated token account...", "green")
+        async with self.semaphore:
             try:
-                token_accounts = await self.client.get_token_accounts_by_owner(USER, TokenAccountOpts(MINT))
-                ASSOCIATED_USER = token_accounts.value[0].pubkey
-                token_account_instruction = None
-                cprint(f"Token account found: {ASSOCIATED_USER}", "green")
-            except:
-                ASSOCIATED_USER = get_associated_token_address(USER, MINT)
-                token_account_instruction = create_associated_token_account(USER, USER, MINT)
-                cprint(f"Creating token account : {ASSOCIATED_USER}", "green")
+                current_active_trades = self.cursor.execute("SELECT * FROM trades WHERE status = 'active'").fetchall()
+                if len(current_active_trades) >= 3:
+                    cprint("Max active trades reached. Skipping buy transaction.", "red")
+                    return False
+                cprint(f"Starting buy transaction for mint: {mint_str}", "green")
+                if not mint_str:
+                    cprint("Mint is required", "red")
+                    return False
+                coin_data = await self.coin.get_coin_data(mint_str)
+                
+                if not coin_data:
+                    cprint("Failed to retrieve coin data.", "red")
+                    return False
 
-            cprint("Calculating transaction amounts...", "green")
-            sol_dec = 1e9
-            token_dec = 1e6
-            virtual_sol_reserves = coin_data.virtual_sol_reserves / sol_dec
-            virtual_token_reserves = coin_data.virtual_token_reserves / token_dec
-            amount = self.coin.sol_for_tokens(sol_in, virtual_sol_reserves, virtual_token_reserves)
-            amount = int(amount * token_dec)
-            
-            slippage_adjustment = 1 + (slippage / 100)
-            max_sol_cost = int((sol_in * slippage_adjustment) * sol_dec)
-            cprint(f"Amount: {amount}, Max Sol Cost: {max_sol_cost}", "green")
+                if coin_data.complete:
+                    cprint("Warning: This token has bonded and is only tradable on Raydium.", "red")
+                    return False
 
-            cprint("Creating swap instructions...", "green")
-            keys = [
-                AccountMeta(pubkey=GLOBAL, is_signer=False, is_writable=False),
-                AccountMeta(pubkey=FEE_RECIPIENT, is_signer=False, is_writable=True),
-                AccountMeta(pubkey=MINT, is_signer=False, is_writable=False),
-                AccountMeta(pubkey=BONDING_CURVE, is_signer=False, is_writable=True),
-                AccountMeta(pubkey=ASSOCIATED_BONDING_CURVE, is_signer=False, is_writable=True),
-                AccountMeta(pubkey=ASSOCIATED_USER, is_signer=False, is_writable=True),
-                AccountMeta(pubkey=USER, is_signer=True, is_writable=True),
-                AccountMeta(pubkey=SYSTEM_PROGRAM, is_signer=False, is_writable=False),
-                AccountMeta(pubkey=TOKEN_PROGRAM, is_signer=False, is_writable=False),
-                AccountMeta(pubkey=RENT, is_signer=False, is_writable=False),
-                AccountMeta(pubkey=EVENT_AUTHORITY, is_signer=False, is_writable=False),
-                AccountMeta(pubkey=PUMP_FUN_PROGRAM, is_signer=False, is_writable=False)
-            ]
+                MINT = coin_data.mint
+                BONDING_CURVE = coin_data.bonding_curve
+                ASSOCIATED_BONDING_CURVE = coin_data.associated_bonding_curve
+                USER = self.payer_keypair.pubkey()
 
-            data = bytearray()
-            data.extend(bytes.fromhex("66063d1201daebea"))
-            data.extend(struct.pack('<Q', amount))
-            data.extend(struct.pack('<Q', max_sol_cost))
-            swap_instruction = Instruction(PUMP_FUN_PROGRAM, bytes(data), keys)
+                cprint("Fetching or creating associated token account...", "green")
+                try:
+                    token_accounts = await self.client.get_token_accounts_by_owner(USER, TokenAccountOpts(MINT))
+                    ASSOCIATED_USER = token_accounts.value[0].pubkey
+                    token_account_instruction = None
+                    cprint(f"Token account found: {ASSOCIATED_USER}", "green")
+                except:
+                    ASSOCIATED_USER = get_associated_token_address(USER, MINT)
+                    token_account_instruction = create_associated_token_account(USER, USER, MINT)
+                    cprint(f"Creating token account : {ASSOCIATED_USER}", "green")
 
-            instructions = [
-                set_compute_unit_limit(UNIT_BUDGET),
-                set_compute_unit_price(UNIT_PRICE),
-            ]
-            if token_account_instruction:
-                instructions.append(token_account_instruction)
-            instructions.append(swap_instruction)
+                cprint("Calculating transaction amounts...", "green")
+                sol_dec = 1e9
+                token_dec = 1e6
+                virtual_sol_reserves = coin_data.virtual_sol_reserves / sol_dec
+                virtual_token_reserves = coin_data.virtual_token_reserves / token_dec
+                amount = self.coin.sol_for_tokens(sol_in, virtual_sol_reserves, virtual_token_reserves)
+                amount = int(amount * token_dec)
+                
+                slippage_adjustment = 1 + (slippage / 100)
+                max_sol_cost = int((sol_in * slippage_adjustment) * sol_dec)
+                cprint(f"Amount: {amount}, Max Sol Cost: {max_sol_cost}", "green")
 
-            cprint("Compiling transaction message...", "green")
-            blockhash = await self.client.get_latest_blockhash()
-            
-            compiled_message = MessageV0.try_compile(
-                self.payer_keypair.pubkey(),
-                instructions,
-                [],
-               blockhash.value.blockhash,
-            )
+                cprint("Creating swap instructions...", "green")
+                keys = [
+                    AccountMeta(pubkey=GLOBAL, is_signer=False, is_writable=False),
+                    AccountMeta(pubkey=FEE_RECIPIENT, is_signer=False, is_writable=True),
+                    AccountMeta(pubkey=MINT, is_signer=False, is_writable=False),
+                    AccountMeta(pubkey=BONDING_CURVE, is_signer=False, is_writable=True),
+                    AccountMeta(pubkey=ASSOCIATED_BONDING_CURVE, is_signer=False, is_writable=True),
+                    AccountMeta(pubkey=ASSOCIATED_USER, is_signer=False, is_writable=True),
+                    AccountMeta(pubkey=USER, is_signer=True, is_writable=True),
+                    AccountMeta(pubkey=SYSTEM_PROGRAM, is_signer=False, is_writable=False),
+                    AccountMeta(pubkey=TOKEN_PROGRAM, is_signer=False, is_writable=False),
+                    AccountMeta(pubkey=RENT, is_signer=False, is_writable=False),
+                    AccountMeta(pubkey=EVENT_AUTHORITY, is_signer=False, is_writable=False),
+                    AccountMeta(pubkey=PUMP_FUN_PROGRAM, is_signer=False, is_writable=False)
+                ]
 
-            cprint("Sending transaction...", "green")
-            txn_sig = await self.client.send_transaction(
-                txn=VersionedTransaction(compiled_message, [self.payer_keypair]),
-                opts=TxOpts(skip_preflight=True)
-            )
-            txn_sig = txn_sig.value
-            
-            confirmed = await self.confirm_txn(txn_sig, operation="buy")
-            
-            cprint(f"Transaction confirmed: {confirmed}", "green")
-            return confirmed
+                data = bytearray()
+                data.extend(bytes.fromhex("66063d1201daebea"))
+                data.extend(struct.pack('<Q', amount))
+                data.extend(struct.pack('<Q', max_sol_cost))
+                swap_instruction = Instruction(PUMP_FUN_PROGRAM, bytes(data), keys)
 
-        except Exception as e:
-            cprint(f"Error occurred during transaction: {e}", "red")
-            return False
+                instructions = [
+                    set_compute_unit_limit(UNIT_BUDGET),
+                    set_compute_unit_price(UNIT_PRICE),
+                ]
+                if token_account_instruction:
+                    instructions.append(token_account_instruction)
+                instructions.append(swap_instruction)
+
+                cprint("Compiling transaction message...", "green")
+                blockhash = await self.client.get_latest_blockhash()
+                
+                compiled_message = MessageV0.try_compile(
+                    self.payer_keypair.pubkey(),
+                    instructions,
+                    [],
+                   blockhash.value.blockhash,
+                )
+
+                cprint("Sending transaction...", "green")
+                txn_sig = await self.client.send_transaction(
+                    txn=VersionedTransaction(compiled_message, [self.payer_keypair]),
+                    opts=TxOpts(skip_preflight=True)
+                )
+                txn_sig = txn_sig.value
+                
+                confirmed = await self.confirm_txn(txn_sig, operation="buy")
+                
+                cprint(f"Transaction confirmed: {confirmed}", "green")
+                start_time = asyncio.get_event_loop().time()
+                if confirmed:
+                    current_price = await self.coin.get_token_price(mint_str)
+                    bought_price = sol_in / (amount / token_dec)  # Calculate price paid per token
+                    bought_amount = amount / token_dec  # Convert from decimal representation
+                    profit_loss = 0  # Initial profit/loss is 0
+                    
+                    self.cursor.execute(
+                        """
+                        INSERT INTO trades (
+                            mint, 
+                            bc_pk, 
+                            user, 
+                            start_time, 
+                            status, 
+                            current_price, 
+                            bought_price, 
+                            bought_amount, 
+                            profit_loss,
+                            take_profit_percentage
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            mint_str, 
+                            str(BONDING_CURVE), 
+                            str(USER), 
+                            start_time, 
+                            "active", 
+                            current_price, 
+                            bought_price, 
+                            bought_amount, 
+                            profit_loss,
+                            PERCENTAGE_TAKE_PROFIT
+                        )
+                    )
+                    self.db.commit()  # Don't forget to commit the transaction
+                
+                return confirmed
+
+            except Exception as e:
+                cprint(f"Error occurred during transaction: {e}", "red")
+                return False
 
     async def sell(self, mint_str: str, percentage: int = 100, slippage: int = 5, max_retries: int = 7) -> bool:
         try:
@@ -205,7 +230,7 @@ class TokenTrader(BaseClass):
             ASSOCIATED_USER = get_associated_token_address(USER, MINT)
 
             cprint("Retrieving token balance...", "green")
-            token_balance = await self.get_token_balance(mint_str)
+            token_balance = await self.coin.get_token_balance(mint_str, self.payer_keypair)
             if token_balance == 0 or token_balance is None:
                 cprint("Token balance is zero. Nothing to sell.", "red")
                 return False
@@ -275,9 +300,17 @@ class TokenTrader(BaseClass):
 
             cprint("Confirming transaction...", "green")
             confirmed = await self.confirm_txn(txn_sig, max_retries=max_retries, operation="sell" )
-            
             cprint(f"Transaction confirmed: {confirmed}", "green")
+            if confirmed:
+                end_time = asyncio.get_event_loop().time()
+                self.cursor.execute(
+                    """
+                    UPDATE trades SET end_time = ?, status = ?, profit_loss = ? WHERE mint = ?
+                    """,
+                    (end_time, "closed", mint_str)
+                )
             return confirmed
+        
 
         except Exception as e:
             cprint(f"Error occurred during transaction: {e}", "red")
