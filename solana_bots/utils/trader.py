@@ -65,8 +65,8 @@ class TokenTrader(BaseClass):
     async def buy(self, mint_str: str, sol_in: float = 0.001, slippage: int = 5) -> bool:
         async with self.semaphore:
             try:
-                current_active_trades = self.cursor.execute("SELECT * FROM trades WHERE status = 'active'").fetchall()
-                if len(current_active_trades) >= 3:
+                active_trades_count = self.cursor.execute("SELECT COUNT(*) FROM trades WHERE status = 'active'").fetchone()[0]
+                if active_trades_count >= 2:
                     cprint("Max active trades reached. Skipping buy transaction.", "red")
                     return False
                 cprint(f"Starting buy transaction for mint: {mint_str}", "green")
@@ -301,14 +301,6 @@ class TokenTrader(BaseClass):
             cprint("Confirming transaction...", "green")
             confirmed = await self.confirm_txn(txn_sig, max_retries=max_retries, operation="sell" )
             cprint(f"Transaction confirmed: {confirmed}", "green")
-            if confirmed:
-                end_time = asyncio.get_event_loop().time()
-                self.cursor.execute(
-                    """
-                    UPDATE trades SET end_time = ?, status = ?, profit_loss = ? WHERE mint = ?
-                    """,
-                    (end_time, "closed", mint_str)
-                )
             return confirmed
         
 

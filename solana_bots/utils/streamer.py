@@ -25,6 +25,10 @@ class Streamer(BaseClass):
         self.monitoring_task = asyncio.create_task(self.monitor_trades())
         
     async def monitor_trades(self):
+        """
+        Monitor trades and sell when profit target is met
+        return: None
+        """
         while True:
             try:
                 cprint("Monitoring trades...", "blue")
@@ -55,7 +59,7 @@ class Streamer(BaseClass):
                         self.cursor.execute(
                             """
                             UPDATE trades 
-                            SET current_price = ?, take_profit_percentage = ? 
+                            SET current_price = ?, profit_loss = ?
                             WHERE mint = ? AND status = 'active'
                             """,
                             (current_price, profit_percentage, mint)
@@ -63,7 +67,7 @@ class Streamer(BaseClass):
                         self.db.commit()
                         
                         # If profit target met, initiate sell
-                        if profit_percentage >= take_profit:
+                        if profit_percentage >= 10.0:
                             cprint(f"Take profit target met for {mint}! Current profit: {profit_percentage:.2f}%", "green")
                             # Create sell task
                             sell_task = asyncio.create_task(self.token_trader.sell(mint))
@@ -72,15 +76,15 @@ class Streamer(BaseClass):
                             # Wait for the sell task to complete
                             try:
                                 sale_result = await sell_task
+                                cprint(f"Sale result: {sale_result}", "green")
                                 if sale_result:  # Assuming sell returns True on successful sale
-                                    # Update trade status to completed
                                     self.cursor.execute(
                                         """
                                         UPDATE trades 
-                                        SET status = 'completed', sold_price = ?, sold_at = CURRENT_TIMESTAMP 
+                                        SET status = 'COMPLETED', sold_price = ?, sold_at = CURRENT_TIMESTAMP, profit_loss = ?
                                         WHERE mint = ? AND status = 'active'
                                         """,
-                                        (current_price, mint)
+                                        (current_price, profit_percentage, mint)
                                     )
                                     self.db.commit()
                                     cprint(f"Trade completed for {mint}", "green")
@@ -95,7 +99,7 @@ class Streamer(BaseClass):
             except Exception as e:
                 cprint(f"Error monitoring trades: {e}", "red")
             
-            await asyncio.sleep(25)
+            await asyncio.sleep(10)
                 
     
     def parse_log_data(self, log_data: str) -> tuple[str, str, str]:
